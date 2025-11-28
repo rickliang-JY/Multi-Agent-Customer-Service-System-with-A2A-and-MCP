@@ -1,177 +1,459 @@
 """
-Comprehensive Test Suite for Multi-Agent Customer Service System
-Demonstrates all required scenarios with detailed A2A coordination
+Test Scenarios for A2A Multi-Agent Customer Service System
+Tests the three required scenarios: Task Allocation, Negotiation, Multi-step
 
-IMPORTANT: Run 'python database_setup.py' first to create support.db
+Run with: python test_scenarios.py
+Requires all servers to be running (use run_servers.py first)
 """
 
+import asyncio
+import httpx
 import json
-import os
-from typing import Dict, Any
-from multi_agent_system import process_query
-from mcp_server import mcp_server
+import uuid
+import textwrap
+from datetime import datetime
 
-def print_section_header(title: str):
-    """Print formatted section header"""
-    print("\n" + "="*100)
-    print(f" {title} ".center(100, "="))
-    print("="*100 + "\n")
+# Configuration
+MCP_SERVER_URL = "http://localhost:8000"
+CUSTOMER_DATA_AGENT_URL = "http://localhost:8001"
+SUPPORT_AGENT_URL = "http://localhost:8002"
 
-def print_result(result: Dict):
-    """Print query result in formatted way"""
-    print(f"Query: {result['query']}")
-    print(f"\nAgent Messages Exchanged: {result['messages_exchanged']}")
-    print(f"\n{'─'*100}")
-    print("COORDINATION LOG:")
-    print('─'*100)
-    for log in result['coordination_log']:
-        print(f"  {log}")
-    print('─'*100)
-    print(f"\nFINAL RESPONSE TO CUSTOMER:")
-    print('─'*100)
-    print(result['response'])
-    print('─'*100)
-    
-    # Show retrieved data if available
-    if result.get('customer_data'):
-        print(f"\nCustomer Data Retrieved:")
-        customer_data = result['customer_data']
-        if isinstance(customer_data, dict) and customer_data.get('type') == 'list':
-            # List of customers
-            customers = customer_data.get('customers', [])
-            print(f"  Total Customers: {len(customers)}")
-            for idx, c in enumerate(customers[:10], 1):  # Show up to 10 customers
-                print(f"    {idx}. {c.get('name')} ({c.get('email')}) - {c.get('status')}")
-            if len(customers) > 10:
-                print(f"    ... and {len(customers) - 10} more")
+# ============================================================================
+# Output Formatting Utilities
+# ============================================================================
+
+def print_separator(title="", char="="):
+    print("\n" + char * 70)
+    if title:
+        print(f"  {title}")
+        print(char * 70)
+
+def print_json(data, indent=2, prefix="    "):
+    """Pretty print JSON data with prefix"""
+    formatted = json.dumps(data, indent=indent, default=str)
+    for line in formatted.split('\n'):
+        print(f"{prefix}{line}")
+
+def print_wrapped_text(text, width=66, prefix="    | "):
+    """Print text with word wrapping"""
+    lines = text.split('\n')
+    for line in lines:
+        if line.strip():
+            wrapped = textwrap.wrap(line, width=width)
+            for wrapped_line in wrapped:
+                print(f"{prefix}{wrapped_line}")
         else:
-            # Single customer
-            print(json.dumps(customer_data, indent=2))
-    
-    if result.get('tickets'):
-        tickets = result['tickets']
-        print(f"\nTickets Retrieved: {len(tickets)}")
-        for idx, t in enumerate(tickets[:15], 1):  # Show up to 15 tickets
-            issue = t.get('issue', 'N/A')
-            issue_display = issue[:50] + "..." if len(issue) > 50 else issue
-            customer_name = t.get('customer_name', 'Unknown')
-            print(f"    {idx}. [{t.get('priority', 'N/A').upper()}] {issue_display}")
-            print(f"       Customer: {customer_name} | Status: {t.get('status', 'N/A')}")
-        if len(tickets) > 15:
-            print(f"    ... and {len(tickets) - 15} more tickets")
-        
-        # Show summary
-        open_count = sum(1 for t in tickets if t.get('status') == 'open')
-        in_progress = sum(1 for t in tickets if t.get('status') == 'in_progress')
-        resolved = sum(1 for t in tickets if t.get('status') == 'resolved')
-        print(f"\n    Summary: Total={len(tickets)}, Open={open_count}, In Progress={in_progress}, Resolved={resolved}")
+            print(f"{prefix}")
 
-def run_all_tests():
-    """Run all test scenarios"""
+def print_box(title, content, width=68):
+    """Print content in a nice box"""
+    print(f"\n    +{'-' * width}+")
+    print(f"    | {title.ljust(width - 2)} |")
+    print(f"    +{'-' * width}+")
     
-    print_section_header("INITIALIZING SYSTEM")
+    if isinstance(content, list):
+        for line in content:
+            print(f"    | {line.ljust(width - 2)} |")
+    else:
+        print_wrapped_text(content, width=width-4, prefix="    | ")
     
-    # Check if database exists
-    if not os.path.exists('support.db'):
-        print("❌ ERROR: Database 'support.db' not found!")
-        print("\nPlease run the following command first:")
-        print("  python database_setup.py")
-        print("\nThen run this test script again.")
+    print(f"    +{'-' * width}+")
+
+def format_support_response(response_data):
+    """Format Support Agent response nicely"""
+    if not response_data:
         return
     
-    print("✅ Database 'support.db' found!")
-    print("✅ MCP Server ready with tools:", mcp_server.list_tools())
+    print("\n    " + "=" * 60)
+    print("    SUPPORT AGENT RESPONSE")
+    print("    " + "=" * 60)
     
-    # ============================================================================
-    # TEST SCENARIO 1: Simple Query - Single Agent
-    # ============================================================================
-    print_section_header("TEST SCENARIO 1: Simple Query (Single Agent)")
-    print("Expected Flow: Router → Customer Data Agent → Final Response")
-    print("Tests: Single agent, straightforward MCP call\n")
+    if isinstance(response_data, dict):
+        # Extract agent info
+        agent = response_data.get("agent", "Support Agent")
+        response_text = response_data.get("response", "")
+        
+        print(f"\n    Agent: {agent}")
+        print("    " + "-" * 60)
+        
+        if response_text:
+            print("\n    Response Content:")
+            print("    " + "-" * 60)
+            print_wrapped_text(response_text, width=56, prefix="    | ")
+            print("    " + "-" * 60)
+    else:
+        print(f"\n    {response_data}")
     
-    result = process_query("Get customer information for ID 5", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 2: Task Allocation
-    # ============================================================================
-    print_section_header("TEST SCENARIO 2: Task Allocation")
-    print("Expected Flow: Router → Customer Data → Support → Final Response")
-    print("Tests: Multiple agents coordinate, data fetch + support response\n")
-    
-    result = process_query("I need help with my account, customer ID 3", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 3: Coordinated Query
-    # ============================================================================
-    print_section_header("TEST SCENARIO 3: Coordinated Query (Account Upgrade)")
-    print("Expected Flow: Router → Customer Data → Support → Final Response")
-    print("Tests: Multiple agents coordinate with context passing\n")
-    
-    result = process_query("I'm customer 1 and need help upgrading my account", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 4: Complex Multi-Step Query
-    # ============================================================================
-    print_section_header("TEST SCENARIO 4: Complex Query (Multiple Data Sources)")
-    print("Expected Flow: Router → Customer Data (multiple MCP calls) → Support → Final")
-    print("Tests: Requires negotiation between data and support agents\n")
-    
-    result = process_query("Show me all active customers who have high priority open tickets", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 5: Escalation Query
-    # ============================================================================
-    print_section_header("TEST SCENARIO 5: Escalation (Urgent Issue)")
-    print("Expected Flow: Router (high priority) → Customer Data → Support (urgent) → Final")
-    print("Tests: Router identifies urgency and routes appropriately\n")
-    
-    result = process_query("I've been charged twice for my subscription! This is urgent, customer ID 2", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 6: Multi-Intent Query
-    # ============================================================================
-    print_section_header("TEST SCENARIO 6: Multi-Intent Query")
-    print("Expected Flow: Router → Customer Data → Support (handles both intents) → Final")
-    print("Tests: Parallel task execution and coordination\n")
-    
-    result = process_query("I'm customer 7, update my email to newemail@example.com and show my ticket history", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 7: Negotiation/Escalation
-    # ============================================================================
-    print_section_header("TEST SCENARIO 7: Negotiation (Multiple Intents)")
-    print("Expected Flow: Router detects multiple intents → coordinates agents → Final")
-    print("Tests: Cancellation + billing issues require agent negotiation\n")
-    
-    result = process_query("I want to cancel my subscription but I'm having billing issues, ID 5", verbose=False)
-    print_result(result)
-    
-    # ============================================================================
-    # TEST SCENARIO 8: Complex Data Aggregation
-    # ============================================================================
-    print_section_header("TEST SCENARIO 8: Multi-Step Coordination (Data Aggregation)")
-    print("Expected Flow: Router → Data (customers) → Data (high priority tickets) → Support → Final")
-    print("Tests: Router decomposes task, agents coordinate for report\n")
-    
-    # First, let's create some high-priority tickets for active customers
-    print("Setting up test data: Creating high-priority tickets for active customers...")
-    mcp_server.call_tool('create_ticket', customer_id=1, issue="Urgent: System access problems", priority='high')
-    mcp_server.call_tool('create_ticket', customer_id=5, issue="Critical billing error", priority='high')
-    mcp_server.call_tool('create_ticket', customer_id=7, issue="Service outage impacting business", priority='high')
-    print("Test tickets created.\n")
-    
-    result = process_query("What's the status of all high-priority tickets for active customers?", verbose=False)
-    print_result(result)
+    print("    " + "=" * 60)
 
-    for tool in mcp_server.list_tools():
-        print(f"  • {tool}")
-    print("\n" + "="*100)
+def format_customer_data_response(response_data):
+    """Format Customer Data Agent response nicely"""
+    if not response_data:
+        return
+    
+    print("\n    " + "=" * 60)
+    print("    CUSTOMER DATA AGENT RESPONSE")
+    print("    " + "=" * 60)
+    
+    if isinstance(response_data, dict):
+        agent = response_data.get("agent", "Customer Data Agent")
+        operations = response_data.get("operations", [])
+        
+        print(f"\n    Agent: {agent}")
+        print(f"    Operations: {len(operations)}")
+        print("    " + "-" * 60)
+        
+        for i, op in enumerate(operations):
+            tool = op.get("tool", "unknown")
+            result = op.get("result", {})
+            
+            print(f"\n    Operation {i+1}: {tool}")
+            print("    " + "-" * 40)
+            
+            if result.get("success"):
+                data = result.get("data")
+                if isinstance(data, list):
+                    print(f"    Records found: {len(data)}")
+                    for item in data[:5]:  # Show first 5
+                        if item.get("name"):
+                            email_or_status = item.get('email', item.get('status', ''))
+                            print(f"      - ID {item.get('id')}: {item.get('name')} ({email_or_status})")
+                        elif item.get("subject"):
+                            subject = item.get('subject', 'No subject')
+                            subject = subject[:40] if subject else 'No subject'
+                            priority = item.get('priority', 'N/A')
+                            print(f"      - Ticket {item.get('id')}: {subject} [{priority}]")
+                        else:
+                            print(f"      - {item}")
+                    if len(data) > 5:
+                        print(f"      ... and {len(data) - 5} more")
+                elif isinstance(data, dict):
+                    if data.get("name"):
+                        print(f"    Customer: {data.get('name')}")
+                        print(f"    Email: {data.get('email', 'N/A')}")
+                        print(f"    Status: {data.get('status', 'N/A')}")
+                    if data.get("tickets"):
+                        tickets = data.get("tickets", [])
+                        print(f"    Tickets: {len(tickets)}")
+                        for t in tickets[:3]:
+                            subject = t.get('subject', 'No subject')
+                            subject = subject[:35] if subject else 'No subject'
+                            priority = t.get('priority', 'N/A')
+                            print(f"      - {subject} [{priority}]")
+                    elif not data.get("name"):
+                        # Generic dict display
+                        for key, value in list(data.items())[:5]:
+                            print(f"    {key}: {value}")
+            else:
+                print(f"    Error: {result.get('error', 'Unknown error')}")
+    
+    print("\n    " + "=" * 60)
 
-if __name__ == '__main__':
-    run_all_tests()
+# ============================================================================
+# Server Health Check
+# ============================================================================
+
+async def check_servers():
+    """Check if all servers are running"""
+    print_separator("Server Health Check")
+    
+    servers = [
+        ("MCP Server", MCP_SERVER_URL, "/health"),
+        ("Customer Data Agent", CUSTOMER_DATA_AGENT_URL, "/.well-known/agent-card.json"),
+        ("Support Agent", SUPPORT_AGENT_URL, "/.well-known/agent-card.json"),
+    ]
+    
+    all_ok = True
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for name, url, endpoint in servers:
+            try:
+                r = await client.get(f"{url}{endpoint}")
+                if r.status_code == 200:
+                    print(f"  [OK] {name}: {url}")
+                else:
+                    print(f"  [FAIL] {name}: Status {r.status_code}")
+                    all_ok = False
+            except Exception as e:
+                print(f"  [FAIL] {name}: {e}")
+                all_ok = False
+    
+    return all_ok
+
+
+# ============================================================================
+# MCP Server Tests
+# ============================================================================
+
+async def test_mcp_server():
+    """Test MCP Server endpoints"""
+    print_separator("TEST: MCP Server")
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Test tools/list
+        print("\n>>> Request: POST /tools/list")
+        r = await client.post(f"{MCP_SERVER_URL}/tools/list", json={
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/list"
+        })
+        data = r.json()
+        print("<<< Response:")
+        tools = data.get("result", {}).get("tools", [])
+        print(f"    Found {len(tools)} tools:")
+        for tool in tools:
+            print(f"      - {tool['name']}: {tool.get('description', '')[:50]}...")
+        
+        # Test tools/call - get_customer
+        print("\n>>> Request: POST /tools/call (get_customer)")
+        print("    Params: {customer_id: 1}")
+        r = await client.post(f"{MCP_SERVER_URL}/tools/call", json={
+            "jsonrpc": "2.0",
+            "id": "2",
+            "method": "tools/call",
+            "params": {
+                "name": "get_customer",
+                "arguments": {"customer_id": 1}
+            }
+        })
+        data = r.json()
+        print("<<< Response:")
+        if "result" in data:
+            content = json.loads(data["result"]["content"][0]["text"])
+            print_json(content)
+        
+        # Test tools/call - get_tickets_by_priority
+        print("\n>>> Request: POST /tools/call (get_tickets_by_priority)")
+        print("    Params: {priority: 'high'}")
+        r = await client.post(f"{MCP_SERVER_URL}/tools/call", json={
+            "jsonrpc": "2.0",
+            "id": "4",
+            "method": "tools/call",
+            "params": {
+                "name": "get_tickets_by_priority",
+                "arguments": {"priority": "high"}
+            }
+        })
+        data = r.json()
+        print("<<< Response:")
+        if "result" in data:
+            content = json.loads(data["result"]["content"][0]["text"])
+            print(f"    Found {len(content.get('data', []))} high priority tickets")
+
+
+# ============================================================================
+# A2A Message Helper
+# ============================================================================
+
+async def send_a2a_message(client, url, message, agent_name, format_response=True):
+    """Send A2A message and return response"""
+    message_id = str(uuid.uuid4())
+    
+    print(f"\n>>> A2A Request to {agent_name}")
+    print(f"    URL: {url}")
+    msg_display = message[:80] + "..." if len(message) > 80 else message
+    print(f"    Message: \"{msg_display}\"")
+    
+    request_body = {
+        "jsonrpc": "2.0",
+        "id": datetime.now().isoformat(),
+        "method": "message/send",
+        "params": {
+            "message": {
+                "messageId": message_id,
+                "role": "user",
+                "parts": [{"kind": "text", "text": message}]
+            }
+        }
+    }
+    
+    r = await client.post(url, json=request_body)
+    data = r.json()
+    
+    print(f"\n<<< A2A Response from {agent_name}")
+    
+    if "error" in data:
+        print(f"    ERROR: {data['error']}")
+        return None, None
+    
+    parsed_content = None
+    
+    if "result" in data:
+        result = data["result"]
+        status = result.get("status", {})
+        print(f"    Task ID: {result.get('id', 'N/A')}")
+        print(f"    Status: {status.get('state', 'N/A')}")
+        
+        if "artifacts" in result:
+            for artifact in result["artifacts"]:
+                for part in artifact.get("parts", []):
+                    if part.get("kind") == "text":
+                        text = part.get("text", "")
+                        try:
+                            parsed_content = json.loads(text)
+                        except:
+                            parsed_content = text
+        
+        # Format response based on agent type
+        if format_response and parsed_content:
+            if "Support" in agent_name:
+                format_support_response(parsed_content)
+            else:
+                format_customer_data_response(parsed_content)
+        
+        return result, parsed_content
+    
+    return None, None
+
+
+# ============================================================================
+# A2A Agent Tests
+# ============================================================================
+
+async def test_customer_data_agent():
+    """Test Customer Data Agent A2A endpoints"""
+    print_separator("TEST: Customer Data Agent (A2A)")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Test Agent Card
+        print("\n>>> Request: GET /.well-known/agent-card.json")
+        r = await client.get(f"{CUSTOMER_DATA_AGENT_URL}/.well-known/agent-card.json")
+        card = r.json()
+        print("<<< Response:")
+        print(f"    Name: {card.get('name')}")
+        print(f"    Description: {card.get('description')}")
+        print(f"    Skills: {[s.get('id') for s in card.get('skills', [])]}")
+        
+        # Test message/send - Get customer
+        await send_a2a_message(
+            client, 
+            CUSTOMER_DATA_AGENT_URL, 
+            "Get customer 5 information",
+            "Customer Data Agent"
+        )
+        
+        # Test message/send - Get tickets
+        await send_a2a_message(
+            client,
+            CUSTOMER_DATA_AGENT_URL,
+            "Show high priority tickets",
+            "Customer Data Agent"
+        )
+
+
+async def test_support_agent():
+    """Test Support Agent A2A endpoints"""
+    print_separator("TEST: Support Agent (A2A)")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Test Agent Card
+        print("\n>>> Request: GET /.well-known/agent-card.json")
+        r = await client.get(f"{SUPPORT_AGENT_URL}/.well-known/agent-card.json")
+        card = r.json()
+        print("<<< Response:")
+        print(f"    Name: {card.get('name')}")
+        print(f"    Description: {card.get('description')}")
+        print(f"    Skills: {[s.get('id') for s in card.get('skills', [])]}")
+        
+        # Test message/send - Simple query
+        await send_a2a_message(
+            client,
+            SUPPORT_AGENT_URL,
+            "Hello, I need help with my account",
+            "Support Agent"
+        )
+
+
+# ============================================================================
+# Import Orchestrator
+# ============================================================================
+
+from orchestrator import Orchestrator
+
+# ============================================================================
+# Scenario 1: Task Allocation
+# ============================================================================
+
+async def test_scenario_task_allocation():
+    """Scenario 1: Task Allocation - Using Real Orchestrator"""
+    print_separator("SCENARIO 1: Task Allocation")
+    print("  Description: Route query to appropriate agent based on content")
+    print("  Query: \"Can you help me get customer 3 details?\"")
+    print("  Expected: Customer Data Agent\n")
+    
+    orchestrator = Orchestrator(verbose=True)
+    await orchestrator.initialize()
+    
+    await orchestrator.process_query("Can you help me get customer 3 details?")
+
+
+# ============================================================================
+# Scenario 2: Negotiation
+# ============================================================================
+
+async def test_scenario_negotiation():
+    """Scenario 2: Agent Negotiation/Coordination - Using Real Orchestrator"""
+    print_separator("SCENARIO 2: Agent Negotiation / Coordination")
+    print("  Description: Data retrieval then response generation")
+    print("  Query: \"I need a summary of customer 5's situation\"")
+    print("  Expected: Customer Data Agent -> Support Agent\n")
+    
+    orchestrator = Orchestrator(verbose=True)
+    await orchestrator.initialize()
+    
+    await orchestrator.process_query("I need a summary of customer 5's situation")
+
+
+# ============================================================================
+# Scenario 3: Multi-step Coordination
+# ============================================================================
+
+async def test_scenario_multistep():
+    """Scenario 3: Multi-step Coordination - Using Real Orchestrator"""
+    print_separator("SCENARIO 3: Multi-step Coordination")
+    print("  Description: Complex query with data retrieval + analysis")
+    print("  Query: \"Show high priority tickets and help me understand which customers need attention\"")
+    print("  Expected: Customer Data Agent -> Support Agent (with context)\n")
+    
+    orchestrator = Orchestrator(verbose=True)
+    await orchestrator.initialize()
+    
+    await orchestrator.process_query(
+        "Show all high priority tickets and help me understand which customers need immediate attention"
+    )
+
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+async def main():
+    """Run all tests"""
+    print("\n")
+    print("=" * 70)
+    print("  A2A MULTI-AGENT CUSTOMER SERVICE SYSTEM - TEST SUITE")
+    print("=" * 70)
+    print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
+    
+    # Check servers
+    if not await check_servers():
+        print("\n[ERROR] Not all servers are running!")
+        print("Please start servers first: python run_servers.py")
+        return
+    
+    # Run tests
+    await test_mcp_server()
+    await test_customer_data_agent()
+    await test_support_agent()
+    
+    # Run scenarios
+    await test_scenario_task_allocation()
+    await test_scenario_negotiation()
+    await test_scenario_multistep()
+    
+
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
