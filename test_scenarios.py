@@ -370,141 +370,83 @@ async def test_support_agent():
 from orchestrator import Orchestrator
 
 # ============================================================================
-# Scenario 1: Task Allocation
+# Scenario 1: Simple Query
 # ============================================================================
 
-async def test_scenario_task_allocation():
-    """Scenario 1: Task Allocation - Using Real Orchestrator"""
-    print_separator("SCENARIO 1: Task Allocation")
-    print("  Query: \"Get customer 3 details\"")
-    print("  Expected Flow: Router -> Customer Data Agent -> Router -> Response")
+async def test_scenario_simple_query():
+    """Scenario 1: Simple Query - Single agent, straightforward MCP call"""
+    print_separator("SCENARIO 1: Simple Query")
+    print("  Query: \"Get customer information for ID 5\"")
+    print("  Expected: Single agent (Customer Data), straightforward MCP call")
     
     orchestrator = Orchestrator(verbose=True)
     await orchestrator.initialize()
     
-    await orchestrator.process_query("Get customer 3 details")
+    await orchestrator.process_query("Get customer information for ID 5")
 
 
 # ============================================================================
-# Scenario 2: Negotiation
+# Scenario 2: Coordinated Query
 # ============================================================================
 
-async def test_scenario_negotiation():
-    """Scenario 2: Negotiation/Escalation - Using Real Orchestrator"""
-    print_separator("SCENARIO 2: Negotiation / Escalation")
-    print("  Query: \"I want to cancel my subscription but I'm having billing issues\"")
-    print("  Expected Flow: Router detects intents -> Support -> Router -> Customer Data -> Router -> Support -> Response")
+async def test_scenario_coordinated_query():
+    """Scenario 2: Coordinated Query - Multiple agents coordinate"""
+    print_separator("SCENARIO 2: Coordinated Query")
+    print("  Query: \"I'm customer 5 and need help upgrading my account\"")
+    print("  Expected: Multiple agents coordinate (data fetch + support response)")
     
     orchestrator = Orchestrator(verbose=True)
     await orchestrator.initialize()
     
-    await orchestrator.process_query("I want to cancel my subscription but I'm having billing issues")
+    await orchestrator.process_query("I'm customer 5 and need help upgrading my account")
 
 
 # ============================================================================
-# Scenario 3: Multi-step Coordination
+# Scenario 3: Complex Query
 # ============================================================================
 
-async def test_scenario_multistep():
-    """Scenario 3: Multi-step Coordination - Using Real Orchestrator"""
-    print_separator("SCENARIO 3: Multi-Step Coordination")
-    print("  Query: \"Show high priority tickets and help me understand which customers need attention\"")
-    print("  Expected Flow: Router -> Customer Data Agent -> Router -> Support Agent -> Router -> Response")
+async def test_scenario_complex_query():
+    """Scenario 3: Complex Query - Negotiation between agents"""
+    print_separator("SCENARIO 3: Complex Query")
+    print("  Query: \"Show me all active customers who have open tickets\"")
+    print("  Expected: Negotiation between data and support agents")
     
     orchestrator = Orchestrator(verbose=True)
     await orchestrator.initialize()
     
-    await orchestrator.process_query(
-        "Show all high priority tickets and help me understand which customers need immediate attention"
-    )
+    await orchestrator.process_query("Show me all active customers who have open tickets")
 
 
 # ============================================================================
-# Scenario 4: Simple Data Query
+# Scenario 4: Escalation
 # ============================================================================
 
-async def test_scenario_simple_data():
-    """Scenario 4: Simple Data Query - Single Agent"""
-    print_separator("SCENARIO 4: Simple Data Query")
-    print("  Query: \"List all active customers\"")
-    print("  Expected Flow: Router -> Customer Data Agent -> Router -> Response")
+async def test_scenario_escalation():
+    """Scenario 4: Escalation - Identify urgency and route appropriately"""
+    print_separator("SCENARIO 4: Escalation")
+    print("  Query: \"I've been charged twice, please refund immediately!\"")
+    print("  Expected: Router identifies urgency, routes with HIGH priority")
     
     orchestrator = Orchestrator(verbose=True)
     await orchestrator.initialize()
     
-    await orchestrator.process_query("List all active customers")
+    await orchestrator.process_query("I've been charged twice, please refund immediately!")
 
 
 # ============================================================================
-# Scenario 5: Support Only Query
+# Scenario 5: Multi-Intent
 # ============================================================================
 
-async def test_scenario_support_only():
-    """Scenario 5: Support Only - Direct to Support Agent"""
-    print_separator("SCENARIO 5: Support Only Query")
-    print("  Query: \"Help me understand your refund policy\"")
-    print("  Expected Flow: Router -> Support Agent -> Router -> Response")
+async def test_scenario_multi_intent():
+    """Scenario 5: Multi-Intent - Parallel task execution and coordination"""
+    print_separator("SCENARIO 5: Multi-Intent")
+    print("  Query: \"Update my email to new@email.com and show my ticket history\"")
+    print("  Expected: Parallel task execution (update + fetch)")
     
     orchestrator = Orchestrator(verbose=True)
     await orchestrator.initialize()
     
-    await orchestrator.process_query("Help me understand your refund policy")
-
-
-# ============================================================================
-# Scenario 6: Customer Context + Support
-# ============================================================================
-
-async def test_scenario_customer_support():
-    """Scenario 6: Customer Context with Support Response"""
-    print_separator("SCENARIO 6: Customer Context + Support")
-    print("  Query: \"Explain the status of customer 5's account and any issues they have\"")
-    print("  Expected Flow: Router -> Customer Data Agent -> Router -> Support Agent -> Response")
-    
-    orchestrator = Orchestrator(verbose=True)
-    await orchestrator.initialize()
-    
-    await orchestrator.process_query(
-        "Explain the status of customer 5's account and any issues they have"
-    )
-
-
-# ============================================================================
-# Scenario 7: Ticket Analysis
-# ============================================================================
-
-async def test_scenario_ticket_analysis():
-    """Scenario 7: Ticket Analysis - Data + Analysis"""
-    print_separator("SCENARIO 7: Ticket Analysis")
-    print("  Query: \"Analyze all open tickets and summarize the main issues\"")
-    print("  Expected Flow: Router -> Customer Data Agent -> Router -> Support Agent -> Response")
-    
-    orchestrator = Orchestrator(verbose=True)
-    await orchestrator.initialize()
-    
-    await orchestrator.process_query(
-        "Analyze all open tickets and summarize the main issues customers are facing"
-    )
-
-
-# ============================================================================
-# Scenario 8: Complex Multi-Intent (Upgrade + Billing Issue)
-# ============================================================================
-
-async def test_scenario_upgrade_issue():
-    """Scenario 8: Complex - Upgrade Request with Existing Issue"""
-    print_separator("SCENARIO 8: Complex Multi-Intent (Upgrade + Billing)")
-    print("  Query: \"I want to upgrade my plan but I have an unresolved billing problem\"")
-    print("  Expected Flow: Negotiation pattern with multiple intents")
-    
-    orchestrator = Orchestrator(verbose=True)
-    await orchestrator.initialize()
-    
-    await orchestrator.process_query(
-        "I want to upgrade my plan but I have an unresolved billing problem from last month"
-    )
-
-
+    await orchestrator.process_query("Update my email to new@email.com and show my ticket history for customer 3")
 
 
 
@@ -533,14 +475,11 @@ async def main():
     await test_support_agent()
     
     # Run scenarios
-    await test_scenario_task_allocation()
-    await test_scenario_negotiation()
-    await test_scenario_multistep()
-    await test_scenario_simple_data()
-    await test_scenario_support_only()
-    await test_scenario_customer_support()
-    await test_scenario_ticket_analysis()
-    await test_scenario_upgrade_issue()
+    await test_scenario_simple_query()
+    await test_scenario_coordinated_query()
+    await test_scenario_complex_query()
+    await test_scenario_escalation()
+    await test_scenario_multi_intent()
     
 
 
