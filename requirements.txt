@@ -1,0 +1,17 @@
+# MCP Server
+flask
+flask-cors
+
+# A2A Agents
+google-adk
+httpx
+uvicorn
+nest-asyncio
+python-dotenv
+termcolor
+
+# A2A Protocol
+a2a
+
+# Testing
+requests
