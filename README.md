@@ -122,10 +122,15 @@ COMMUNICATION SUMMARY
 
 FLOW DIAGRAM:
    [1] User -> Router Agent: REQUEST
+
    [2] Router Agent -> Data Agent: DELEGATE
+
    [3] Data Agent -> Router Agent: RESPONSE
+
    [4] Router Agent -> Support Agent: DELEGATE
+
    [5] Support Agent -> Router Agent: RESPONSE
+   
    [6] Router Agent -> User: FINAL_RESPONSE
 
 
