@@ -1,489 +1,470 @@
-"""
-MCP Server - Model Context Protocol Implementation
-HTTP Server with JSON-RPC 2.0 endpoints for tool operations
+# MCP Server for Customer Management
+# Standalone version - Run in terminal: python mcp_server.py
 
-Endpoints:
-- GET  /health         - Health check
-- POST /tools/list     - List available tools (MCP protocol)
-- POST /tools/call     - Execute a tool (MCP protocol)
-- POST /                - Generic JSON-RPC handler
-
-Compatible with MCP Inspector for testing.
-"""
-
-import json
+from flask import Flask, request, Response, jsonify
+from flask_cors import CORS
 import sqlite3
+import json
+import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from contextlib import asynccontextmanager
+from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import uvicorn
-
-# ============================================================================
+# ============================================================
 # Configuration
-# ============================================================================
+# ============================================================
 
+# Database path - Ensure support.db is in the same directory
 DB_PATH = "support.db"
 
-# ============================================================================
-# Database Helpers
-# ============================================================================
+# Server configuration
+SERVER_HOST = '127.0.0.1'
+SERVER_PORT = 5000
 
-def get_db():
+# ============================================================
+# Flask App
+# ============================================================
+
+app = Flask(__name__)
+CORS(app)
+
+# ============================================================
+# Database Functions
+# ============================================================
+
+def get_db_connection():
     """Get database connection"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-# ============================================================================
-# MCP Tool Functions
-# ============================================================================
+
+def row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    """Convert database row to dictionary"""
+    return {key: row[key] for key in row.keys()}
+
+
+# ============================================================
+# Tool Functions (5 tools)
+# ============================================================
 
 def get_customer(customer_id: int) -> Dict[str, Any]:
-    """Get customer by ID"""
+    """TOOL 1: Get customer information by ID"""
     try:
-        conn = get_db()
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM customers WHERE id = ?', (customer_id,))
         row = cursor.fetchone()
         conn.close()
-        
-        if row:
-            return {"success": True, "data": dict(row)}
-        return {"success": False, "error": f"Customer {customer_id} not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
-def list_customers(status: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
-    """List customers with optional filter"""
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        if status:
-            cursor.execute(
-                'SELECT * FROM customers WHERE status = ? LIMIT ?',
-                (status, limit)
-            )
+        if row:
+            return {'success': True, 'customer': row_to_dict(row)}
         else:
-            cursor.execute('SELECT * FROM customers LIMIT ?', (limit,))
-        
+            return {'success': False, 'error': f'Customer with ID {customer_id} not found'}
+    except Exception as e:
+        return {'success': False, 'error': f'Database error: {str(e)}'}
+
+
+def list_customers(status: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+    """TOOL 2: List customers, optionally filter by status"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if status and status not in ['active', 'disabled']:
+            return {'success': False, 'error': 'Status must be "active", "disabled", or null'}
+
+        limit = max(1, min(limit, 1000))
+
+        if status:
+            cursor.execute('SELECT * FROM customers WHERE status = ? ORDER BY name LIMIT ?', (status, limit))
+        else:
+            cursor.execute('SELECT * FROM customers ORDER BY name LIMIT ?', (limit,))
+
         rows = cursor.fetchall()
         conn.close()
-        return {"success": True, "data": [dict(row) for row in rows], "count": len(rows)}
+        customers = [row_to_dict(row) for row in rows]
+
+        return {'success': True, 'count': len(customers), 'customers': customers}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {'success': False, 'error': f'Database error: {str(e)}'}
+
 
 def update_customer(customer_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Update customer information"""
+    """TOOL 3: Update customer information"""
     try:
-        conn = get_db()
-        conn.execute("PRAGMA foreign_keys = ON")
+        if not data or not isinstance(data, dict):
+            return {'success': False, 'error': 'Data must be a non-empty dictionary'}
+
+        allowed_fields = {'name', 'email', 'phone', 'status'}
+        invalid_fields = set(data.keys()) - allowed_fields
+        if invalid_fields:
+            return {'success': False, 'error': f'Invalid fields: {invalid_fields}'}
+
+        if 'status' in data and data['status'] not in ['active', 'disabled']:
+            return {'success': False, 'error': 'Status must be "active" or "disabled"'}
+
+        conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Check customer exists
+
         cursor.execute('SELECT * FROM customers WHERE id = ?', (customer_id,))
         if not cursor.fetchone():
             conn.close()
-            return {"success": False, "error": f"Customer {customer_id} not found"}
-        
-        allowed = ['name', 'email', 'phone', 'status']
+            return {'success': False, 'error': f'Customer with ID {customer_id} not found'}
+
         updates = []
-        values = []
-        
+        params = []
         for field, value in data.items():
-            if field in allowed:
-                updates.append(f"{field} = ?")
-                values.append(value)
-        
+            if value is not None:
+                updates.append(f'{field} = ?')
+                params.append(value.strip() if isinstance(value, str) else value)
+
         if not updates:
             conn.close()
-            return {"success": False, "error": "No valid fields to update"}
-        
-        # Note: updated_at is handled by database trigger
-        values.append(customer_id)
-        
-        cursor.execute(
-            f"UPDATE customers SET {', '.join(updates)} WHERE id = ?",
-            values
-        )
+            return {'success': False, 'error': 'No valid fields to update'}
+
+        updates.append('updated_at = CURRENT_TIMESTAMP')
+        params.append(customer_id)
+
+        cursor.execute(f'UPDATE customers SET {", ".join(updates)} WHERE id = ?', params)
         conn.commit()
-        
-        # Get updated customer
+
         cursor.execute('SELECT * FROM customers WHERE id = ?', (customer_id,))
         row = cursor.fetchone()
         conn.close()
-        
-        return {"success": True, "data": dict(row), "updated_fields": list(data.keys())}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
-def create_ticket(customer_id: int, issue: str, priority: str = "medium") -> Dict[str, Any]:
-    """Create a support ticket"""
+        return {'success': True, 'message': f'Customer {customer_id} updated', 'customer': row_to_dict(row)}
+    except Exception as e:
+        return {'success': False, 'error': f'Database error: {str(e)}'}
+
+
+def create_ticket(customer_id: int, issue: str, priority: str = 'medium') -> Dict[str, Any]:
+    """TOOL 4: Create a support ticket"""
     try:
-        conn = get_db()
+        if not issue or not issue.strip():
+            return {'success': False, 'error': 'Issue description is required'}
+
+        valid_priorities = ['low', 'medium', 'high', 'urgent']
+        if priority not in valid_priorities:
+            return {'success': False, 'error': f'Priority must be one of: {valid_priorities}'}
+
+        conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Verify customer exists
-        cursor.execute('SELECT id FROM customers WHERE id = ?', (customer_id,))
-        if not cursor.fetchone():
+
+        cursor.execute('SELECT id, name FROM customers WHERE id = ?', (customer_id,))
+        customer = cursor.fetchone()
+        if not customer:
             conn.close()
-            return {"success": False, "error": f"Customer {customer_id} not found"}
-        
-        if priority not in ['low', 'medium', 'high']:
-            priority = 'medium'
-        
+            return {'success': False, 'error': f'Customer with ID {customer_id} not found'}
+
         cursor.execute('''
-            INSERT INTO tickets (customer_id, issue, status, priority)
-            VALUES (?, ?, 'open', ?)
-        ''', (customer_id, issue, priority))
-        
+            INSERT INTO tickets (customer_id, issue, priority, status)
+            VALUES (?, ?, ?, 'open')
+        ''', (customer_id, issue.strip(), priority))
+
         ticket_id = cursor.lastrowid
         conn.commit()
-        
+
         cursor.execute('SELECT * FROM tickets WHERE id = ?', (ticket_id,))
-        row = cursor.fetchone()
+        ticket_row = cursor.fetchone()
         conn.close()
-        
-        return {"success": True, "data": dict(row)}
+
+        return {'success': True, 'message': f'Ticket #{ticket_id} created', 'ticket': row_to_dict(ticket_row)}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {'success': False, 'error': f'Database error: {str(e)}'}
+
 
 def get_customer_history(customer_id: int) -> Dict[str, Any]:
-    """Get customer with ticket history"""
+    """TOOL 5: Get customer's ticket history"""
     try:
-        conn = get_db()
+        conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('SELECT * FROM customers WHERE id = ?', (customer_id,))
         customer_row = cursor.fetchone()
-        
         if not customer_row:
             conn.close()
-            return {"success": False, "error": f"Customer {customer_id} not found"}
-        
-        cursor.execute('''
-            SELECT * FROM tickets WHERE customer_id = ? ORDER BY created_at DESC
-        ''', (customer_id,))
-        tickets = [dict(row) for row in cursor.fetchall()]
+            return {'success': False, 'error': f'Customer with ID {customer_id} not found'}
+
+        cursor.execute('SELECT * FROM tickets WHERE customer_id = ? ORDER BY created_at DESC', (customer_id,))
+        ticket_rows = cursor.fetchall()
         conn.close()
-        
+
+        tickets = [row_to_dict(row) for row in ticket_rows]
+        customer = row_to_dict(customer_row)
+
+        total_tickets = len(tickets)
+        open_tickets = sum(1 for t in tickets if t['status'] in ['open', 'in_progress'])
+        resolved_tickets = sum(1 for t in tickets if t['status'] in ['resolved', 'closed'])
+
         return {
-            "success": True,
-            "data": {
-                "customer": dict(customer_row),
-                "tickets": tickets,
-                "ticket_count": len(tickets)
-            }
+            'success': True,
+            'customer': customer,
+            'summary': {
+                'total_tickets': total_tickets,
+                'open_tickets': open_tickets,
+                'resolved_tickets': resolved_tickets
+            },
+            'tickets': tickets
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {'success': False, 'error': f'Database error: {str(e)}'}
 
-def get_tickets_by_priority(priority: str = "high", status: Optional[str] = None) -> Dict[str, Any]:
-    """Get tickets by priority"""
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        if status:
-            cursor.execute('''
-                SELECT t.*, c.name as customer_name, c.email as customer_email
-                FROM tickets t
-                JOIN customers c ON t.customer_id = c.id
-                WHERE t.priority = ? AND t.status = ?
-                ORDER BY t.created_at DESC
-            ''', (priority, status))
-        else:
-            cursor.execute('''
-                SELECT t.*, c.name as customer_name, c.email as customer_email
-                FROM tickets t
-                JOIN customers c ON t.customer_id = c.id
-                WHERE t.priority = ?
-                ORDER BY t.created_at DESC
-            ''', (priority,))
-        
-        tickets = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        
-        return {"success": True, "data": tickets, "count": len(tickets)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
-def update_ticket(ticket_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Update ticket information"""
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM tickets WHERE id = ?', (ticket_id,))
-        if not cursor.fetchone():
-            conn.close()
-            return {"success": False, "error": f"Ticket {ticket_id} not found"}
-        
-        # Only status and priority can be updated (no resolution/updated_at in this schema)
-        allowed = ['status', 'priority']
-        updates = []
-        values = []
-        
-        for field, value in data.items():
-            if field in allowed:
-                updates.append(f"{field} = ?")
-                values.append(value)
-        
-        if not updates:
-            conn.close()
-            return {"success": False, "error": "No valid fields to update"}
-        
-        values.append(ticket_id)
-        
-        cursor.execute(
-            f"UPDATE tickets SET {', '.join(updates)} WHERE id = ?",
-            values
-        )
-        conn.commit()
-        
-        cursor.execute('SELECT * FROM tickets WHERE id = ?', (ticket_id,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        return {"success": True, "data": dict(row)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# ============================================================
+# MCP Protocol Implementation
+# ============================================================
 
-# ============================================================================
-# Tool Registry
-# ============================================================================
-
-TOOLS = {
-    "get_customer": {
-        "function": get_customer,
-        "description": "Get customer information by ID",
+# MCP Tool Definitions
+MCP_TOOLS = [
+    {
+        "name": "get_customer",
+        "description": "Retrieve a specific customer by their ID.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "integer", "description": "Customer ID"}
+                "customer_id": {
+                    "type": "integer",
+                    "description": "The unique ID of the customer"
+                }
             },
             "required": ["customer_id"]
         }
     },
-    "list_customers": {
-        "function": list_customers,
-        "description": "List customers with optional status filter",
+    {
+        "name": "list_customers",
+        "description": "List all customers. Can filter by status.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "description": "Filter by status"},
-                "limit": {"type": "integer", "default": 20}
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "disabled"],
+                    "description": "Optional filter by status"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results (default: 100)"
+                }
             }
         }
     },
-    "update_customer": {
-        "function": update_customer,
-        "description": "Update customer information",
+    {
+        "name": "update_customer",
+        "description": "Update customer information.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "integer"},
-                "data": {"type": "object", "description": "Fields to update"}
+                "customer_id": {
+                    "type": "integer",
+                    "description": "Customer ID"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "Fields to update: name, email, phone, status",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "email": {"type": "string"},
+                        "phone": {"type": "string"},
+                        "status": {"type": "string", "enum": ["active", "disabled"]}
+                    }
+                }
             },
             "required": ["customer_id", "data"]
         }
     },
-    "create_ticket": {
-        "function": create_ticket,
-        "description": "Create a support ticket",
+    {
+        "name": "create_ticket",
+        "description": "Create a support ticket.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "integer"},
-                "issue": {"type": "string"},
-                "priority": {"type": "string", "default": "medium"}
+                "customer_id": {
+                    "type": "integer",
+                    "description": "Customer ID"
+                },
+                "issue": {
+                    "type": "string",
+                    "description": "Issue description"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "urgent"],
+                    "description": "Priority (default: medium)"
+                }
             },
             "required": ["customer_id", "issue"]
         }
     },
-    "get_customer_history": {
-        "function": get_customer_history,
-        "description": "Get customer with ticket history",
+    {
+        "name": "get_customer_history",
+        "description": "Get ticket history for a customer.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "customer_id": {"type": "integer"}
+                "customer_id": {
+                    "type": "integer",
+                    "description": "Customer ID"
+                }
             },
             "required": ["customer_id"]
         }
-    },
-    "get_tickets_by_priority": {
-        "function": get_tickets_by_priority,
-        "description": "Get tickets filtered by priority",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "priority": {"type": "string", "default": "high"},
-                "status": {"type": "string"}
-            }
-        }
-    },
-    "update_ticket": {
-        "function": update_ticket,
-        "description": "Update ticket status or resolution",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticket_id": {"type": "integer"},
-                "data": {"type": "object"}
-            },
-            "required": ["ticket_id", "data"]
-        }
     }
+]
+
+# Tool function mapping
+TOOL_FUNCTIONS = {
+    "get_customer": get_customer,
+    "list_customers": list_customers,
+    "update_customer": update_customer,
+    "create_ticket": create_ticket,
+    "get_customer_history": get_customer_history,
 }
 
-# ============================================================================
-# FastAPI Application
-# ============================================================================
 
-app = FastAPI(
-    title="MCP Server - Customer Service",
-    description="Model Context Protocol server for customer service database",
-    version="1.0.0"
-)
+def create_sse_message(data: Dict[str, Any]) -> str:
+    """Format SSE message"""
+    return f"data: {json.dumps(data)}\n\n"
 
-@app.get("/health")
-async def health():
-    """Health check"""
-    return {"status": "healthy", "service": "mcp-server", "tools": len(TOOLS)}
 
-@app.get("/.well-known/mcp.json")
-async def mcp_manifest():
-    """MCP server manifest"""
-    return {
-        "name": "Customer Service MCP Server",
-        "version": "1.0.0",
-        "description": "MCP server for customer service database operations",
-        "tools": list(TOOLS.keys())
-    }
-
-@app.post("/tools/list")
-async def tools_list():
-    """List available MCP tools"""
-    tools = []
-    for name, info in TOOLS.items():
-        tools.append({
-            "name": name,
-            "description": info["description"],
-            "inputSchema": info["inputSchema"]
-        })
-    
+def handle_initialize(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle initialize request"""
     return {
         "jsonrpc": "2.0",
-        "result": {"tools": tools}
+        "id": message.get("id"),
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {
+                "name": "customer-management-server",
+                "version": "1.0.0"
+            }
+        }
     }
 
-@app.post("/tools/call")
-async def tools_call(request: Request):
-    """Execute an MCP tool"""
-    try:
-        body = await request.json()
-        params = body.get("params", {})
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
-        
-        if not tool_name:
-            return JSONResponse(status_code=400, content={
-                "jsonrpc": "2.0",
-                "error": {"code": -32602, "message": "Missing tool name"}
-            })
-        
-        if tool_name not in TOOLS:
-            return JSONResponse(status_code=400, content={
-                "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": f"Tool '{tool_name}' not found"}
-            })
-        
-        result = TOOLS[tool_name]["function"](**arguments)
-        
+
+def handle_tools_list(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle tools/list request"""
+    return {
+        "jsonrpc": "2.0",
+        "id": message.get("id"),
+        "result": {"tools": MCP_TOOLS}
+    }
+
+
+def handle_tools_call(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle tools/call request"""
+    params = message.get("params", {})
+    tool_name = params.get("name")
+    arguments = params.get("arguments", {})
+
+    if tool_name not in TOOL_FUNCTIONS:
         return {
             "jsonrpc": "2.0",
-            "id": body.get("id"),
+            "id": message.get("id"),
+            "error": {"code": -32601, "message": f"Tool not found: {tool_name}"}
+        }
+
+    try:
+        result = TOOL_FUNCTIONS[tool_name](**arguments)
+        return {
+            "jsonrpc": "2.0",
+            "id": message.get("id"),
             "result": {
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps(result, indent=2, default=str)
-                }]
+                "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
             }
         }
     except Exception as e:
-        return JSONResponse(status_code=500, content={
+        return {
             "jsonrpc": "2.0",
-            "error": {"code": -32603, "message": str(e)}
-        })
+            "id": message.get("id"),
+            "error": {"code": -32603, "message": f"Tool execution error: {str(e)}"}
+        }
 
-@app.post("/")
-async def jsonrpc_handler(request: Request):
-    """Generic JSON-RPC handler"""
-    try:
-        body = await request.json()
-        method = body.get("method", "")
-        
-        if method == "tools/list":
-            return await tools_list()
-        elif method == "tools/call":
-            return await tools_call(request)
-        else:
-            return JSONResponse(status_code=400, content={
-                "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": f"Method '{method}' not found"}
-            })
-    except Exception as e:
-        return JSONResponse(status_code=500, content={
+
+def process_mcp_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Route MCP message to appropriate handler"""
+    method = message.get("method")
+
+    if method == "initialize":
+        return handle_initialize(message)
+    elif method == "tools/list":
+        return handle_tools_list(message)
+    elif method == "tools/call":
+        return handle_tools_call(message)
+    else:
+        return {
             "jsonrpc": "2.0",
-            "error": {"code": -32603, "message": str(e)}
-        })
+            "id": message.get("id"),
+            "error": {"code": -32601, "message": f"Method not found: {method}"}
+        }
 
-# ============================================================================
-# Direct Access Client (for local use)
-# ============================================================================
 
-class MCPClient:
-    """Local MCP client for direct tool access"""
-    
-    def call_tool(self, name: str, **kwargs) -> Dict[str, Any]:
-        if name not in TOOLS:
-            return {"success": False, "error": f"Tool '{name}' not found"}
+# ============================================================
+# Flask Routes
+# ============================================================
+
+@app.route('/mcp', methods=['POST'])
+def mcp_endpoint():
+    """MCP main endpoint - SSE response"""
+    message = request.get_json()
+
+    def generate():
         try:
-            return TOOLS[name]["function"](**kwargs)
+            print(f"[MCP] Method: {message.get('method')}")
+            response = process_mcp_message(message)
+            print(f"[MCP] Response sent")
+            yield create_sse_message(response)
         except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    def list_tools(self) -> List[str]:
-        return list(TOOLS.keys())
+            print(f"[ERROR] {e}")
+            yield create_sse_message({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": f"Error: {str(e)}"}
+            })
 
-mcp_client = MCPClient()
+    return Response(generate(), mimetype='text/event-stream')
 
-# ============================================================================
-# Main
-# ============================================================================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "server": "customer-management-mcp-server",
+        "version": "1.0.0",
+        "tools": [t["name"] for t in MCP_TOOLS]
+    })
+
+
+# ============================================================
+# Main Entry Point
+# ============================================================
 
 if __name__ == "__main__":
-    import sys
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    
-    print(f"""
-╔══════════════════════════════════════════════════════════════╗
-║              MCP Server - Customer Service                   ║
-╠══════════════════════════════════════════════════════════════╣
-║  Port: {port}                                                  ║
-║                                                              ║
-║  Endpoints:                                                  ║
-║    GET  /health         - Health check                       ║
-║    POST /tools/list     - List tools                         ║
-║    POST /tools/call     - Execute tool                       ║
-║                                                              ║
-║  Tools: {len(TOOLS)}                                                   ║
-╚══════════════════════════════════════════════════════════════╝
-    """)
-    
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    print()
+    print("=" * 60)
+    print("MCP Server for Customer Management")
+    print("=" * 60)
+    print(f"Database: {DB_PATH}")
+    print(f"Tools: {[t['name'] for t in MCP_TOOLS]}")
+    print(f"MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
+    print(f"Health Check: http://{SERVER_HOST}:{SERVER_PORT}/health")
+    print("=" * 60)
+    print()
+    print("MCP Inspector:")
+    print("   1. Run: npx @modelcontextprotocol/inspector")
+    print(f"   2. URL: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
+    print("   3. Transport: Streamable HTTP")
+    print()
+    print("Press Ctrl+C to stop the server")
+    print("=" * 60)
+    print()
+
+    # Check if database exists
+    if not os.path.exists(DB_PATH):
+        print(f"[WARNING] Database file {DB_PATH} not found!")
+        print("   Make sure support.db is in the current directory")
+        print()
+
+    # Start server
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)
