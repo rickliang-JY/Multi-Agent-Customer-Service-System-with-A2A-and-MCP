@@ -1,6 +1,4 @@
-# A2A Multi-Agent Customer Service System - Advanced Version
-# Supports complex agent coordination, task allocation, and multi-step communication
-
+# A2A Multi-Agent Customer Service System 
 import os
 import asyncio
 import threading
@@ -112,10 +110,9 @@ class CommunicationTracker:
             color = "magenta"
         
         # Arrow direction based on message type
-        if "REQUEST" in msg_type or "DELEGATE" in msg_type or "CALL" in msg_type:
-            arrow = "-->"
-        else:
-            arrow = "<--"
+        # Arrow always points from sender to receiver
+        # For responses, the from/to are already correctly set (responder -> requester)
+        arrow = "-->"
         
         print(colored(f"\n+--[Step {step}] {time_str}", "white"))
         print(colored(f"| {from_agent} {arrow} {to_agent}", color, attrs=["bold"]))
@@ -151,8 +148,8 @@ class CommunicationTracker:
         # Flow diagram
         print(colored("\nFLOW DIAGRAM:", "cyan", attrs=["bold"]))
         for entry in self.logs:
-            arrow = "->" if "REQUEST" in entry["type"] or "DELEGATE" in entry["type"] else "<-"
-            print(f"   [{entry['step']}] {entry['from']} {arrow} {entry['to']}: {entry['type']}")
+            # Arrow always points from sender to receiver
+            print(f"   [{entry['step']}] {entry['from']} -> {entry['to']}: {entry['type']}")
         
         print(colored("\n" + "=" * 60, "magenta"))
 
