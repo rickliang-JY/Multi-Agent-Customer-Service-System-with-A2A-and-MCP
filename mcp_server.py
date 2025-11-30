@@ -1,5 +1,5 @@
 # MCP Server for Customer Management
-# Standalone version - Run in terminal: python mcp_server.py
+# Run in terminal: python mcp_server.py
 
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
